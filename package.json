@@ -1,0 +1,52 @@
+{
+  "name": "402ok-mcp",
+  "version": "0.1.0",
+  "description": "MCP server middleware for HTTP 402 Payment Required with support for multiple networks including OKX/XLayer",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/payincom/402ok-mcp.git"
+  },
+  "homepage": "https://github.com/payincom/402ok-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/payincom/402ok-mcp/issues"
+  },
+  "keywords": [
+    "http-402",
+    "payment",
+    "mcp",
+    "middleware",
+    "x402",
+    "okx",
+    "xlayer",
+    "blockchain"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "zod": "^3.25.76"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.4",
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3",
+    "zod": "^3.25.76"
+  }
+}
