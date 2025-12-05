@@ -108,6 +108,147 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 ```
 
+### HTTP Server Mode (StreamableHTTPServerTransport)
+
+Deploy as an HTTP server for web-based MCP clients:
+
+```typescript
+import express from "express";
+import { randomUUID } from "node:crypto";
+import { createPaidMcpHandler } from "402ok-mcp";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
+
+const app = express();
+app.use(express.json());
+
+// Store active sessions
+const transports: Record<string, StreamableHTTPServerTransport> = {};
+
+// Server configuration
+const serverConfig = {
+  recipient: "0xe8fb62154382af0812539cfe61b48321d8f846a8",
+  facilitators: {
+    xlayer: {
+      url: "https://www.okx.com",
+      type: "okx" as const,
+      okxCredentials: {
+        apiKey: process.env.OKX_API_KEY!,
+        secretKey: process.env.OKX_SECRET_KEY!,
+        passphrase: process.env.OKX_PASSPHRASE!
+      }
+    }
+  }
+};
+
+// Tool setup function
+const setupTools = (mcp: any) => {
+  mcp.paidTool(
+    "premium_analysis",
+    "AI-powered premium analysis",
+    {
+      payments: [{
+        price: "0.01",
+        chainId: 196,
+        token: "0x74b7f16337b8972027f6196a17a631ac6de26d22",
+        usdcName: "USD Coin",
+        usdcVersion: "2",
+        network: "xlayer",
+        config: { description: "Premium AI analysis" }
+      }]
+    },
+    z.object({ query: z.string() }),
+    async (args) => {
+      return { content: [{ type: "text", text: `Analysis: ${args.query}` }] };
+    }
+  );
+};
+
+// Handle MCP requests
+app.post("/mcp", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  let transport: StreamableHTTPServerTransport;
+
+  if (sessionId && transports[sessionId]) {
+    // Reuse existing session
+    transport = transports[sessionId];
+  } else if (!sessionId && isInitializeRequest(req.body)) {
+    // New session initialization
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (id) => {
+        transports[id] = transport;
+        console.log("Session initialized:", id);
+      },
+      onsessionclosed: (id) => {
+        delete transports[id];
+        console.log("Session closed:", id);
+      }
+    });
+
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        delete transports[transport.sessionId];
+      }
+    };
+
+    // Create paid MCP server and connect
+    const server = createPaidMcpHandler(
+      setupTools,
+      { name: "paid-mcp-http-server", version: "1.0.0" },
+      serverConfig
+    );
+    await server.connect(transport);
+  } else {
+    res.status(400).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Invalid session" },
+      id: null
+    });
+    return;
+  }
+
+  await transport.handleRequest(req, res, req.body);
+});
+
+// Handle SSE for streaming responses
+app.get("/mcp", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"] as string;
+  const transport = transports[sessionId];
+  if (transport) {
+    await transport.handleRequest(req, res);
+  } else {
+    res.status(400).send("Invalid session");
+  }
+});
+
+// Handle session cleanup
+app.delete("/mcp", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"] as string;
+  const transport = transports[sessionId];
+  if (transport) {
+    await transport.handleRequest(req, res);
+  } else {
+    res.status(400).send("Invalid session");
+  }
+});
+
+app.listen(3000, () => {
+  console.log("Paid MCP HTTP server running on http://localhost:3000/mcp");
+});
+```
+
+### Stateless HTTP Mode
+
+For serverless/edge deployments, use stateless mode:
+
+```typescript
+const transport = new StreamableHTTPServerTransport({
+  sessionIdGenerator: undefined  // Disable session management
+});
+```
+
 ### Multi-Network Setup
 
 Allow users to pay with XLayer OR Base Sepolia:
