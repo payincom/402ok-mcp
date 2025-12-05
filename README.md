@@ -31,7 +31,140 @@ npm install 402ok-mcp
 
 ## Quick Start
 
-### Basic Usage with XLayer
+### Pure JSON-RPC HTTP (No SDK Dependency)
+
+MCP is just **JSON-RPC 2.0 over HTTP**. You can build a simple MCP server without `@modelcontextprotocol/sdk`:
+
+```typescript
+import express from "express";
+
+const app = express();
+app.use(express.json());
+
+// Tool definitions
+const tools = [
+  {
+    name: "premium_analysis",
+    description: "AI-powered premium analysis",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"]
+    },
+    price: "0.01",  // USDC
+    handler: async (args: any) => `Analysis result for: ${args.query}`
+  }
+];
+
+// JSON-RPC 2.0 handler
+app.post("/mcp", async (req, res) => {
+  const { jsonrpc, method, params, id } = req.body;
+
+  if (jsonrpc !== "2.0") {
+    return res.json({ jsonrpc: "2.0", error: { code: -32600, message: "Invalid Request" }, id });
+  }
+
+  try {
+    let result;
+
+    switch (method) {
+      case "initialize":
+        // MCP handshake
+        result = {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: { name: "paid-mcp-server", version: "1.0.0" }
+        };
+        break;
+
+      case "tools/list":
+        // List available tools
+        result = {
+          tools: tools.map(t => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema
+          }))
+        };
+        break;
+
+      case "tools/call":
+        // Call a tool
+        const tool = tools.find(t => t.name === params.name);
+        if (!tool) {
+          throw { code: -32601, message: `Tool not found: ${params.name}` };
+        }
+
+        // Check payment (from _meta)
+        const payment = params._meta?.["x402.payment"];
+
+        if (!payment && tool.price) {
+          // Return 402 payment required
+          result = {
+            isError: true,
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                x402Version: 1,
+                error: "_meta.x402.payment is required",
+                accepts: [{
+                  scheme: "exact",
+                  network: "xlayer",
+                  maxAmountRequired: (parseFloat(tool.price) * 1_000_000).toString(),
+                  payTo: "0xYourWalletAddress",
+                  asset: "0x74b7f16337b8972027f6196a17a631ac6de26d22",
+                  extra: { name: "USD Coin", version: "2" }
+                }]
+              })
+            }]
+          };
+        } else {
+          // Execute tool (with payment verification if needed)
+          const output = await tool.handler(params.arguments);
+          result = {
+            content: [{ type: "text", text: output }]
+          };
+        }
+        break;
+
+      case "notifications/initialized":
+        // Client notification - no response needed
+        return res.status(204).send();
+
+      default:
+        throw { code: -32601, message: `Method not found: ${method}` };
+    }
+
+    res.json({ jsonrpc: "2.0", result, id });
+  } catch (error: any) {
+    res.json({
+      jsonrpc: "2.0",
+      error: { code: error.code || -32603, message: error.message },
+      id
+    });
+  }
+});
+
+app.listen(3000, () => {
+  console.log("Pure JSON-RPC MCP server running on http://localhost:3000/mcp");
+});
+```
+
+**Key JSON-RPC Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `initialize` | Client handshake, returns server capabilities |
+| `tools/list` | Returns available tools with schemas |
+| `tools/call` | Executes a tool, params include `name`, `arguments`, `_meta` |
+| `notifications/initialized` | Client confirms initialization (no response) |
+
+**Payment Flow via `_meta`:**
+- Payment is passed in `params._meta["x402.payment"]` as base64-encoded JSON
+- If missing, return payment options in the response
+- If present, verify → execute → settle
+
+### Using with SDK (Stdio Transport)
 
 ```typescript
 import { createPaidMcpHandler } from "402ok-mcp";
@@ -248,139 +381,6 @@ const transport = new StreamableHTTPServerTransport({
   sessionIdGenerator: undefined  // Disable session management
 });
 ```
-
-### Pure JSON-RPC HTTP (No SDK Dependency)
-
-MCP is just **JSON-RPC 2.0 over HTTP**. You can build a simple MCP server without `@modelcontextprotocol/sdk`:
-
-```typescript
-import express from "express";
-
-const app = express();
-app.use(express.json());
-
-// Tool definitions
-const tools = [
-  {
-    name: "premium_analysis",
-    description: "AI-powered premium analysis",
-    inputSchema: {
-      type: "object",
-      properties: { query: { type: "string" } },
-      required: ["query"]
-    },
-    price: "0.01",  // USDC
-    handler: async (args: any) => `Analysis result for: ${args.query}`
-  }
-];
-
-// JSON-RPC 2.0 handler
-app.post("/mcp", async (req, res) => {
-  const { jsonrpc, method, params, id } = req.body;
-
-  if (jsonrpc !== "2.0") {
-    return res.json({ jsonrpc: "2.0", error: { code: -32600, message: "Invalid Request" }, id });
-  }
-
-  try {
-    let result;
-
-    switch (method) {
-      case "initialize":
-        // MCP handshake
-        result = {
-          protocolVersion: "2024-11-05",
-          capabilities: { tools: {} },
-          serverInfo: { name: "paid-mcp-server", version: "1.0.0" }
-        };
-        break;
-
-      case "tools/list":
-        // List available tools
-        result = {
-          tools: tools.map(t => ({
-            name: t.name,
-            description: t.description,
-            inputSchema: t.inputSchema
-          }))
-        };
-        break;
-
-      case "tools/call":
-        // Call a tool
-        const tool = tools.find(t => t.name === params.name);
-        if (!tool) {
-          throw { code: -32601, message: `Tool not found: ${params.name}` };
-        }
-
-        // Check payment (from _meta)
-        const payment = params._meta?.["x402.payment"];
-
-        if (!payment && tool.price) {
-          // Return 402 payment required
-          result = {
-            isError: true,
-            content: [{
-              type: "text",
-              text: JSON.stringify({
-                x402Version: 1,
-                error: "_meta.x402.payment is required",
-                accepts: [{
-                  scheme: "exact",
-                  network: "xlayer",
-                  maxAmountRequired: (parseFloat(tool.price) * 1_000_000).toString(),
-                  payTo: "0xYourWalletAddress",
-                  asset: "0x74b7f16337b8972027f6196a17a631ac6de26d22",
-                  extra: { name: "USD Coin", version: "2" }
-                }]
-              })
-            }]
-          };
-        } else {
-          // Execute tool (with payment verification if needed)
-          const output = await tool.handler(params.arguments);
-          result = {
-            content: [{ type: "text", text: output }]
-          };
-        }
-        break;
-
-      case "notifications/initialized":
-        // Client notification - no response needed
-        return res.status(204).send();
-
-      default:
-        throw { code: -32601, message: `Method not found: ${method}` };
-    }
-
-    res.json({ jsonrpc: "2.0", result, id });
-  } catch (error: any) {
-    res.json({
-      jsonrpc: "2.0",
-      error: { code: error.code || -32603, message: error.message },
-      id
-    });
-  }
-});
-
-app.listen(3000, () => {
-  console.log("Pure JSON-RPC MCP server running on http://localhost:3000/mcp");
-});
-```
-
-**Key JSON-RPC Methods:**
-
-| Method | Description |
-|--------|-------------|
-| `initialize` | Client handshake, returns server capabilities |
-| `tools/list` | Returns available tools with schemas |
-| `tools/call` | Executes a tool, params include `name`, `arguments`, `_meta` |
-| `notifications/initialized` | Client confirms initialization (no response) |
-
-**Payment Flow via `_meta`:**
-- Payment is passed in `params._meta["x402.payment"]` as base64-encoded JSON
-- If missing, return payment options in the response
-- If present, verify → execute → settle
 
 ### Multi-Network Setup
 
